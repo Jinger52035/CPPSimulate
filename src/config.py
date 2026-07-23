@@ -21,23 +21,39 @@ class AppSettings:
 # ──────────────────────────────────────────────
 
 COLORS = {
-    # ── 基础背景层次（GitHub Dark Dimmed 风格）─
-    "bg":          "#22272E",   # 主窗口背景
-    "bg_editor":   "#1C2128",   # 编辑器背景（最暗）
-    "bg_light":    "#2D333B",   # 侧边栏/工具栏
-    "bg_panel":    "#2D333B",   # 内存面板
-    "bg_card":     "#373E47",   # 卡片背景
-    "bg_input":    "#3D444D",   # 悬停/输入框
+    # ── Primer / GitHub Dark Dimmed 语义令牌 ───
+    "canvas":       "#1C2128",
+    "surface":      "#22272E",
+    "surface_subtle":"#2D333B",
+    "surface_raised":"#343B45",
+    "surface_hover": "#373E47",
+    "surface_pressed": "#3D444D",
+    "border_muted": "#30363D",
+    "border":       "#444C56",
+    "border_focus": "#539BF5",
+    "fg_default":   "#CDD9E5",
+    "fg_muted":     "#ADBAC7",
+    "fg_subtle":    "#768390",
+    "accent":       "#539BF5",
+    "accent_hover": "#6CB6FF",
+    "accent_pressed": "#4184E4",
+    "accent_muted": "#1B3A5C",
+    "danger":       "#E5534B",
+    "danger_fg":    "#FFAAA5",
+    "danger_bg":    "#30262A",
+    "danger_border":"#713535",
 
-    # ── 边框与分割线 ──────────────────────────
-    "border":      "#444C56",   # 普通边框
-    "border_focus":"#539BF5",   # 聚焦蓝
-    "separator":   "#30363D",   # 细分割线
-
-    # ── 文字层次 ──────────────────────────────
-    "text":        "#ADBAC7",   # 正文
-    "text_bright": "#CDD9E5",   # 标题/变量名
-    "text_dim":    "#636E7B",   # 辅助/注释
+    # ── 旧组件兼容别名 ──────────────────────────
+    "bg":          "#22272E",
+    "bg_editor":   "#1C2128",
+    "bg_light":    "#2D333B",
+    "bg_panel":    "#2D333B",
+    "bg_card":     "#343B45",
+    "bg_input":    "#3D444D",
+    "separator":   "#30363D",
+    "text":        "#ADBAC7",
+    "text_bright": "#CDD9E5",
+    "text_dim":    "#768390",
     "text_select": "#FFFFFF",
 
     # ── 语法高亮（GitHub Dark 配色）───────────
@@ -49,8 +65,7 @@ COLORS = {
     "syn_const":   "#DCBDFB",   # 常量/宏：薰衣草紫
 
     # ── 品牌/强调色 ───────────────────────────
-    "accent":      "#539BF5",   # 主蓝（GitHub blue）
-    "accent_dim":  "#2660A4",   # 深蓝（按下）
+    "accent_dim":  "#4184E4",   # 深蓝（按下）
     "accent_bg":   "#1B3A5C",   # 蓝色背景层
 
     # ── 语义色 ────────────────────────────────
@@ -61,8 +76,8 @@ COLORS = {
     "yellow_bright":"#DAAA3F",  # 亮黄（高亮变量）
     "yellow_bg":   "#2E2A05",   # 黄色背景层
     "red":         "#E5534B",   # 错误红
-    "red_bright":  "#FF8080",   # 亮红
-    "red_bg":      "#3A1A1A",   # 红色背景层（堆区）
+    "red_bright":  "#FFAAA5",   # 亮红
+    "red_bg":      "#30262A",   # subtle danger 背景
     "purple":      "#DCBDFB",   # 紫（类型）
     "purple_bg":   "#2A1F3D",   # 紫色背景层
     "teal":        "#39C5CF",   # 青（代码段）

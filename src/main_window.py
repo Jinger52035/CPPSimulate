@@ -8,18 +8,44 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QPlainTextEdit, QPushButton, QLabel,
-    QFileDialog, QScrollArea, QStackedWidget, QDialog,
-    QToolBar, QSlider, QListWidget, QListWidgetItem,
+    QFileDialog, QDialog, QStyle,
+    QToolBar, QSlider, QTreeWidget, QTreeWidgetItem,
 )
 from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QSize
 
-from .cpp_interpreter import CppInterpreter, ExecutionStep, MemoryRegion, Variable
+from .cpp_interpreter import CppInterpreter, ExecutionStep
 from .config import COLORS, AppSettings
 from .editor import CodeEditor
 from .highlighter import CppHighlighter
-from .panels import MemoryPanel, StackPanel, UnifiedMemoryPanel
+from .web_memory_view import WebMemoryView
 from .dialogs import SettingsDialog, CrashDialog
+
+
+EXAMPLE_CURRICULUM = (
+    ("01_language_basics", "语言基础", (
+        "01_variables.cpp", "02_loop.cpp",
+    )),
+    ("02_functions_scope_stack", "函数、作用域与调用栈", (
+        "03_function_stack.cpp", "08_scope.cpp", "07_recursion.cpp",
+    )),
+    ("03_pointers_dynamic_memory", "指针与动态内存", (
+        "06_pointer_address.cpp", "10_swap.cpp", "04_heap_memory.cpp",
+        "11_array_heap.cpp", "13_heap_growth.cpp",
+    )),
+    ("04_objects_layout", "对象、生命周期与布局", (
+        "05_class_object.cpp", "12_multiple_objects.cpp", "09_struct_padding.cpp",
+    )),
+    ("05_memory_model", "进程内存模型", (
+        "14_memory_segments.cpp",
+    )),
+    ("06_memory_safety", "内存安全错误", (
+        "15_wild_pointer.cpp", "16_double_free.cpp", "17_null_deref.cpp",
+    )),
+    ("07_stl_algorithms", "STL 与算法", (
+        "18_vector_basic.cpp", "19_unordered_map.cpp",
+    )),
+)
 
 
 class MainWindow(QMainWindow):
@@ -39,7 +65,7 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle("C++ 执行可视化教学工具")
-        self.setMinimumSize(1280, 780)
+        self.setMinimumSize(960, 620)
         self._apply_global_style()
         self._build_ui()
         self._load_examples()
@@ -69,37 +95,74 @@ class MainWindow(QMainWindow):
                 padding: 0 8px;
             }}
             QPushButton {{
-                background-color: {COLORS['bg_card']};
-                color: {COLORS['text']};
+                min-height: 26px;
+                background-color: {COLORS['surface_raised']};
+                color: {COLORS['fg_default']};
                 border: 1px solid {COLORS['border']};
-                border-radius: 6px;
-                padding: 4px 14px;
+                border-radius: 5px;
+                padding: 0 11px;
                 font-size: 12px;
+                font-weight: 600;
                 font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
             }}
+            QPushButton[iconOnly="true"] {{
+                min-width: 30px;
+                max-width: 30px;
+                min-height: 30px;
+                max-height: 30px;
+                padding: 0;
+            }}
+            QPushButton[iconOnly="true"]:focus {{
+                padding: 0;
+            }}
             QPushButton:hover {{
-                background-color: {COLORS['bg_input']};
-                border-color: {COLORS['border_focus']};
-                color: {COLORS['text_bright']};
+                background-color: {COLORS['surface_hover']};
+                border-color: {COLORS['border']};
             }}
             QPushButton:pressed {{
-                background-color: {COLORS['accent_bg']};
-                border-color: {COLORS['accent']};
-                color: {COLORS['accent']};
+                background-color: {COLORS['surface_pressed']};
             }}
-            QPushButton:checked {{
-                background-color: {COLORS['accent_bg']};
-                color: {COLORS['accent']};
+            QPushButton:focus {{
+                border: 2px solid {COLORS['border_focus']};
+                padding: 0 10px;
+            }}
+            QPushButton[variant="primary"] {{
+                background-color: {COLORS['accent']};
+                color: #FFFFFF;
                 border-color: {COLORS['accent']};
-                font-weight: bold;
+            }}
+            QPushButton[variant="primary"]:hover {{
+                background-color: {COLORS['accent_hover']};
+                border-color: {COLORS['accent_hover']};
+            }}
+            QPushButton[variant="primary"]:pressed {{
+                background-color: {COLORS['accent_pressed']};
+                border-color: {COLORS['accent_pressed']};
+            }}
+            QPushButton[variant="toggle"]:checked {{
+                background-color: {COLORS['accent_muted']};
+                color: #96D0FF;
+                border-color: {COLORS['accent']};
+            }}
+            QPushButton[variant="quiet"] {{
+                background-color: transparent;
+                border-color: transparent;
+                color: {COLORS['fg_muted']};
+            }}
+            QPushButton[variant="quiet"]:hover {{
+                background-color: {COLORS['surface_hover']};
+                color: {COLORS['fg_default']};
             }}
             QPushButton:disabled {{
-                color: {COLORS['text_dim']};
-                border-color: {COLORS['separator']};
+                color: {COLORS['fg_subtle']};
+                border-color: {COLORS['border_muted']};
                 background-color: transparent;
             }}
             QSplitter::handle {{
                 background: {COLORS['separator']};
+            }}
+            QSplitter::handle:hover {{
+                background: {COLORS['border']};
             }}
             QScrollBar:vertical {{
                 background: transparent;
@@ -145,7 +208,7 @@ class MainWindow(QMainWindow):
                 font-size: 12px;
             }}
             QGroupBox {{
-                color: {COLORS['green_bright']};
+                color: {COLORS['text_bright']};
                 border: 1px solid {COLORS['border']};
                 border-radius: 6px;
                 margin-top: 12px;
@@ -159,6 +222,22 @@ class MainWindow(QMainWindow):
                 padding: 0 6px;
                 background: {COLORS['stack_bg']};
             }}
+            QLabel#executionPanel {{
+                min-height: 44px;
+                padding: 8px 12px;
+                background: {COLORS['surface_subtle']};
+                color: {COLORS['fg_muted']};
+                border: 1px solid {COLORS['border_muted']};
+                border-left: 3px solid {COLORS['accent']};
+                border-radius: 5px;
+                font-size: 12px;
+            }}
+            QLabel#executionPanel[danger="true"] {{
+                background: {COLORS['danger_bg']};
+                color: {COLORS['danger_fg']};
+                border-color: {COLORS['danger_border']};
+                border-left-color: {COLORS['danger']};
+            }}
         """)
 
     # ── UI 构建 ───────────────────────────────
@@ -167,7 +246,7 @@ class MainWindow(QMainWindow):
         # 工具栏
         toolbar = QToolBar("工具栏")
         toolbar.setMovable(False)
-        toolbar.setIconSize(__import__('PyQt6.QtCore', fromlist=['QSize']).QSize(16, 16))
+        toolbar.setIconSize(QSize(16, 16))
         toolbar.setStyleSheet(f"""
             QToolBar {{
                 background: {COLORS['bg_light']};
@@ -194,56 +273,65 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(app_title)
         toolbar.addSeparator()
 
-        open_btn = QPushButton("打开")
-        open_btn.setToolTip("打开 C++ 文件")
-        open_btn.clicked.connect(self._open_file)
-        toolbar.addWidget(open_btn)
-        toolbar.addSeparator()
+        standard_icons = QStyle.StandardPixmap
+        self._auto_play_icon = self.style().standardIcon(standard_icons.SP_MediaPlay)
+        self._auto_pause_icon = self.style().standardIcon(standard_icons.SP_MediaPause)
 
-        self._run_btn = QPushButton("▶  运行")
-        self._run_btn.setToolTip("解析并准备执行步骤")
-        self._run_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {COLORS['accent_bg']};
-                color: {COLORS['accent']};
-                border: 1px solid {COLORS['accent']};
-                border-radius: 6px;
-                padding: 4px 14px;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['accent']};
-                color: #FFFFFF;
-            }}
-            QPushButton:pressed {{
-                background: {COLORS['accent_dim']};
-                color: #FFFFFF;
-            }}
-        """)
+        def configure_icon_button(button, name, variant, icon, tooltip, accessible_name):
+            button.setObjectName(name)
+            button.setProperty("variant", variant)
+            button.setProperty("iconOnly", True)
+            button.setIcon(icon)
+            button.setIconSize(QSize(16, 16))
+            button.setToolTip(tooltip)
+            button.setAccessibleName(accessible_name)
+            button.setAccessibleDescription(tooltip)
+
+        self._run_btn = QPushButton()
+        configure_icon_button(
+            self._run_btn, "runButton", "primary",
+            self.style().standardIcon(standard_icons.SP_MediaPlay),
+            "解析并准备执行步骤", "运行",
+        )
         self._run_btn.clicked.connect(self._run_code)
         toolbar.addWidget(self._run_btn)
 
-        self._prev_btn = QPushButton("← 上一步")
-        self._prev_btn.setToolTip("回退到上一步")
+        self._prev_btn = QPushButton()
+        configure_icon_button(
+            self._prev_btn, "previousButton", "secondary",
+            self.style().standardIcon(standard_icons.SP_MediaSkipBackward),
+            "回退到上一步", "上一步",
+        )
         self._prev_btn.clicked.connect(self._step_back)
         self._prev_btn.setEnabled(False)
         toolbar.addWidget(self._prev_btn)
 
-        self._step_btn = QPushButton("单步 →")
-        self._step_btn.setToolTip("执行下一步")
+        self._step_btn = QPushButton()
+        configure_icon_button(
+            self._step_btn, "stepButton", "secondary",
+            self.style().standardIcon(standard_icons.SP_MediaSkipForward),
+            "执行下一步", "单步执行",
+        )
         self._step_btn.clicked.connect(self._step_forward)
         self._step_btn.setEnabled(False)
         toolbar.addWidget(self._step_btn)
 
-        self._auto_btn = QPushButton("▶▶ 自动")
-        self._auto_btn.setToolTip("自动步进播放")
+        self._auto_btn = QPushButton()
+        configure_icon_button(
+            self._auto_btn, "autoButton", "toggle", self._auto_play_icon,
+            "自动步进播放", "自动播放",
+        )
         self._auto_btn.setCheckable(True)
+        self._auto_btn.toggled.connect(self._sync_auto_button_state)
         self._auto_btn.clicked.connect(self._toggle_auto)
         toolbar.addWidget(self._auto_btn)
 
-        self._reset_btn = QPushButton("重置")
-        self._reset_btn.setToolTip("重置到初始状态")
+        self._reset_btn = QPushButton()
+        configure_icon_button(
+            self._reset_btn, "resetButton", "quiet",
+            self.style().standardIcon(standard_icons.SP_BrowserReload),
+            "重置到初始状态", "重置",
+        )
         self._reset_btn.clicked.connect(self._reset)
         self._reset_btn.setEnabled(False)
         toolbar.addWidget(self._reset_btn)
@@ -283,15 +371,21 @@ class MainWindow(QMainWindow):
                 border: 2px solid {COLORS['accent']};
             }}
             QSlider::handle:horizontal:hover {{
-                border-color: {COLORS['text_bright']};
-                background: {COLORS['accent']};
+                border-color: {COLORS['accent_hover']};
+                background: {COLORS['accent_hover']};
+            }}
+            QSlider:focus {{
+                border: 1px solid {COLORS['border_focus']};
+                border-radius: 5px;
             }}
         """)
         toolbar.addWidget(self._speed_slider)
 
         toolbar.addSeparator()
 
-        settings_btn = QPushButton("⚙  设置")
+        settings_btn = QPushButton("⚙ 设置")
+        settings_btn.setObjectName("settingsButton")
+        settings_btn.setProperty("variant", "quiet")
         settings_btn.clicked.connect(self._open_settings)
         settings_btn.setToolTip("内存面板布局与分段粒度设置")
         toolbar.addWidget(settings_btn)
@@ -322,7 +416,7 @@ class MainWindow(QMainWindow):
 
         # 左侧：文件列表 + 编辑器区（水平 Splitter）
         left_widget = QWidget()
-        left_widget.setMinimumWidth(420)
+        left_widget.setMinimumWidth(360)
         left_outer = QHBoxLayout(left_widget)
         left_outer.setContentsMargins(0, 0, 0, 0)
         left_outer.setSpacing(0)
@@ -338,40 +432,106 @@ class MainWindow(QMainWindow):
         file_layout.setContentsMargins(0, 0, 0, 0)
         file_layout.setSpacing(0)
 
-        file_hdr = QLabel("  EXAMPLES")
-        file_hdr.setStyleSheet(f"""
-            color: {COLORS['text_dim']};
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 1.5px;
-            padding: 8px 10px 7px 10px;
-            border-bottom: 1px solid {COLORS['separator']};
-            background: {COLORS['bg_light']};
+        file_bar = QWidget()
+        file_bar.setObjectName("fileBar")
+        file_bar.setStyleSheet(f"""
+            QWidget#fileBar {{
+                background: {COLORS['surface']};
+                border-bottom: 1px solid {COLORS['border_muted']};
+            }}
         """)
-        file_layout.addWidget(file_hdr)
+        file_bar_layout = QHBoxLayout(file_bar)
+        file_bar_layout.setContentsMargins(10, 6, 8, 6)
+        file_bar_layout.setSpacing(6)
+        file_label = QLabel("File")
+        file_label.setStyleSheet(
+            f"color: {COLORS['fg_default']}; font-size: 12px; font-weight: 600;"
+        )
+        open_btn = QPushButton("打开")
+        open_btn.setObjectName("openButton")
+        open_btn.setProperty("variant", "secondary")
+        open_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        open_btn.setIconSize(QSize(14, 14))
+        open_btn.setToolTip("打开 C++ 文件")
+        open_btn.setAccessibleName("打开文件")
+        open_btn.setAccessibleDescription("打开 C++ 文件")
+        open_btn.clicked.connect(self._open_file)
+        file_bar_layout.addWidget(file_label)
+        file_bar_layout.addStretch()
+        file_bar_layout.addWidget(open_btn)
+        file_layout.addWidget(file_bar)
 
-        self._file_list = QListWidget()
+        file_header = QWidget()
+        file_header.setObjectName("examplesHeader")
+        file_header.setStyleSheet(f"""
+            QWidget#examplesHeader {{
+                background: {COLORS['surface_subtle']};
+                border-bottom: 1px solid {COLORS['border_muted']};
+            }}
+        """)
+        file_header_layout = QHBoxLayout(file_header)
+        file_header_layout.setContentsMargins(10, 7, 8, 7)
+        file_header_layout.setSpacing(6)
+        file_hdr = QLabel("Examples")
+        file_hdr.setStyleSheet(f"color: {COLORS['fg_default']}; font-size: 12px; font-weight: 600;")
+        self._example_count = QLabel("0")
+        self._example_count.setObjectName("examplesCount")
+        self._example_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._example_count.setStyleSheet(f"""
+            QLabel#examplesCount {{
+                min-width: 22px;
+                color: {COLORS['fg_subtle']};
+                background: {COLORS['surface_raised']};
+                border: 1px solid {COLORS['border_muted']};
+                border-radius: 8px;
+                padding: 1px 5px;
+                font-size: 10px;
+                font-weight: 600;
+            }}
+        """)
+        file_header_layout.addWidget(file_hdr)
+        file_header_layout.addStretch()
+        file_header_layout.addWidget(self._example_count)
+        file_layout.addWidget(file_header)
+
+        self._file_list = QTreeWidget()
+        self._file_list.setHeaderHidden(True)
+        self._file_list.setRootIsDecorated(True)
+        self._file_list.setIndentation(12)
+        self._file_list.setUniformRowHeights(True)
         self._file_list.setStyleSheet(f"""
-            QListWidget {{
-                background: {COLORS['bg_light']};
-                border: none;
+            QTreeWidget {{
+                background: {COLORS['surface_subtle']};
+                border: 1px solid transparent;
                 outline: none;
                 font-size: 12px;
-                color: {COLORS['text']};
-                padding: 4px 0;
+                color: {COLORS['fg_muted']};
+                padding: 4px;
             }}
-            QListWidget::item {{
-                padding: 6px 12px;
-                border-radius: 0;
+            QTreeWidget:focus {{
+                border-color: {COLORS['border_focus']};
             }}
-            QListWidget::item:selected {{
-                background: {COLORS['accent_bg']};
-                color: {COLORS['accent']};
-                border-left: 2px solid {COLORS['accent']};
-                padding-left: 10px;
+            QTreeWidget::item {{
+                min-height: 27px;
+                padding: 0 4px;
+                border: 1px solid transparent;
+                border-radius: 4px;
             }}
-            QListWidget::item:hover:!selected {{
-                background: {COLORS['bg_card']};
+            QTreeWidget::item:has-children {{
+                color: {COLORS['fg_default']};
+                font-weight: 600;
+            }}
+            QTreeWidget::item:selected {{
+                background: {COLORS['accent_muted']};
+                color: {COLORS['fg_default']};
+                border-color: #315F8C;
+            }}
+            QTreeWidget::item:hover:!selected {{
+                background: {COLORS['surface_hover']};
+                color: {COLORS['fg_default']};
+            }}
+            QTreeWidget::branch {{
+                background: transparent;
             }}
         """)
         self._file_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -385,12 +545,11 @@ class MainWindow(QMainWindow):
         editor_layout.setContentsMargins(10, 0, 0, 0)
         editor_layout.setSpacing(6)
 
-        code_label = QLabel("SOURCE")
+        code_label = QLabel("Source")
         code_label.setStyleSheet(f"""
             color: {COLORS['text_dim']};
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 1.5px;
+            font-size: 11px;
+            font-weight: 600;
             padding: 2px 0;
         """)
         editor_layout.addWidget(code_label)
@@ -400,36 +559,26 @@ class MainWindow(QMainWindow):
         CppHighlighter(self._editor.document())
         editor_layout.addWidget(self._editor, stretch=4)
 
-        desc_label = QLabel("EXECUTION")
+        desc_label = QLabel("Execution")
         desc_label.setStyleSheet(f"""
             color: {COLORS['text_dim']};
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 1.5px;
+            font-size: 11px;
+            font-weight: 600;
             padding: 2px 0;
         """)
         editor_layout.addWidget(desc_label)
 
         self._desc_box = QLabel("点击「运行」开始解析代码")
+        self._desc_box.setObjectName("executionPanel")
+        self._desc_box.setProperty("danger", False)
         self._desc_box.setWordWrap(True)
-        self._desc_box.setStyleSheet(f"""
-            background: {COLORS['bg_panel']};
-            color: {COLORS['yellow_bright']};
-            border: 1px solid {COLORS['border']};
-            border-left: 3px solid {COLORS['yellow']};
-            border-radius: 4px;
-            padding: 8px 12px;
-            font-size: 12px;
-            min-height: 44px;
-        """)
         editor_layout.addWidget(self._desc_box)
 
-        out_label = QLabel("OUTPUT")
+        out_label = QLabel("Output")
         out_label.setStyleSheet(f"""
             color: {COLORS['text_dim']};
-            font-size: 10px;
-            font-weight: 700;
-            letter-spacing: 1.5px;
+            font-size: 11px;
+            font-weight: 600;
             padding: 2px 0;
         """)
         editor_layout.addWidget(out_label)
@@ -438,10 +587,10 @@ class MainWindow(QMainWindow):
         self._output_box.setReadOnly(True)
         self._output_box.setMaximumHeight(84)
         self._output_box.setStyleSheet(f"""
-            background: {COLORS['bg_editor']};
-            color: {COLORS['green_bright']};
-            border: 1px solid {COLORS['border']};
-            border-radius: 4px;
+            background: {COLORS['canvas']};
+            color: #78C980;
+            border: 1px solid {COLORS['border_muted']};
+            border-radius: 5px;
             font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
             font-size: 12px;
             padding: 4px 6px;
@@ -458,123 +607,16 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
-        # 初始 seg_mode=standard → 3列 × 300px
-        right_widget.setMinimumWidth(900)
+        # 多栏内容在内部横向滚动，右侧 viewport 本身允许收缩。
+        right_widget.setMinimumWidth(0)
 
-        env_bar = QLabel(
-            "  x86-64 · 小端序 · 栈↓低地址    "
-            "char=1B  short=2B  int/float=4B  double/long/ptr=8B  自然对齐"
-        )
-        env_bar.setStyleSheet(f"""
-            background: {COLORS['bg']};
-            color: {COLORS['text_dim']};
-            font-size: 10px;
-            font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-            padding: 4px 10px;
-            border-bottom: 1px solid {COLORS['separator']};
-        """)
-        right_layout.addWidget(env_bar)
-
-        self._mem_stack = QStackedWidget()
-
-        split_page = self._build_split_page(self._settings.seg_mode)
-        self._mem_stack.addWidget(split_page)   # index 0
-
-        self._unified_panel = UnifiedMemoryPanel()
-        self._mem_stack.addWidget(self._unified_panel)   # index 1
-
-        right_layout.addWidget(self._mem_stack)
+        self._memory_view = WebMemoryView(self._settings)
+        self._memory_view.errorOccurred.connect(self._on_memory_view_error)
+        right_layout.addWidget(self._memory_view)
         splitter.addWidget(right_widget)
         splitter.setSizes([500, 780])
 
         main_layout.addWidget(splitter)
-
-    def _build_split_page(self, seg_mode: str) -> QWidget:
-        """构建分开多栏页面，同时更新各面板引用。"""
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        spl = QSplitter(Qt.Orientation.Horizontal)
-        spl.setHandleWidth(4)
-        spl.setStyleSheet(f"QSplitter::handle {{ background: {COLORS['border']}; }}")
-
-        def add_scroll(panel, min_w=300):
-            sc = QScrollArea()
-            sc.setWidgetResizable(True)
-            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            sc.setWidget(panel)
-            sc.setMinimumWidth(min_w)
-            spl.addWidget(sc)
-
-        if seg_mode == "simple":
-            self._code_panel   = MemoryPanel("代码区 (Code)", COLORS["teal"])
-            self._global_panel = MemoryPanel("全局变量", COLORS["accent"])
-            self._heap_panel   = MemoryPanel("堆 (Heap)", COLORS["red"], grow_up=True)
-            self._stack_panel  = StackPanel()
-            add_scroll(self._code_panel)
-            add_scroll(self._global_panel)
-            add_scroll(self._heap_panel)
-            add_scroll(self._stack_panel)
-            spl.setSizes([300, 300, 300, 300])
-
-        elif seg_mode == "detailed":
-            self._code_panel    = MemoryPanel("代码段 (Code)",      COLORS["teal"])
-            self._literal_panel = MemoryPanel("常量区 (Literals)",  COLORS["purple"])
-            self._data_panel    = MemoryPanel("数据段 (Data)  已初始化全局", COLORS["accent"])
-            self._bss_panel     = MemoryPanel("BSS段  未初始化全局",  COLORS["yellow"])
-            self._heap_panel    = MemoryPanel("堆 (Heap)",           COLORS["red"], grow_up=True)
-            self._stack_panel   = StackPanel()
-
-            # 上行：代码段 / 常量区 / 数据段
-            top_spl = QSplitter(Qt.Orientation.Horizontal)
-            top_spl.setHandleWidth(4)
-            top_spl.setStyleSheet(f"QSplitter::handle {{ background: {COLORS['border']}; }}")
-            for p in [self._code_panel, self._literal_panel, self._data_panel]:
-                sc = QScrollArea()
-                sc.setWidgetResizable(True)
-                sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                sc.setWidget(p)
-                sc.setMinimumWidth(300)
-                top_spl.addWidget(sc)
-            top_spl.setSizes([300, 300, 300])
-
-            # 下行：BSS / 堆 / 栈
-            bot_spl = QSplitter(Qt.Orientation.Horizontal)
-            bot_spl.setHandleWidth(4)
-            bot_spl.setStyleSheet(f"QSplitter::handle {{ background: {COLORS['border']}; }}")
-            for p in [self._bss_panel, self._heap_panel, self._stack_panel]:
-                sc = QScrollArea()
-                sc.setWidgetResizable(True)
-                sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                sc.setWidget(p)
-                sc.setMinimumWidth(300)
-                bot_spl.addWidget(sc)
-            bot_spl.setSizes([300, 300, 300])
-
-            # 垂直 splitter 组合上下两行
-            v_spl = QSplitter(Qt.Orientation.Vertical)
-            v_spl.setHandleWidth(4)
-            v_spl.setStyleSheet(f"QSplitter::handle {{ background: {COLORS['border']}; }}")
-            v_spl.addWidget(top_spl)
-            v_spl.addWidget(bot_spl)
-            v_spl.setSizes([1, 1])
-
-            layout.addWidget(v_spl)
-            return page
-
-        else:  # standard
-            self._global_panel = MemoryPanel("全局区 / 静态区", COLORS["accent"])
-            self._heap_panel   = MemoryPanel("堆 (Heap)", COLORS["red"], grow_up=True)
-            self._stack_panel  = StackPanel()
-            add_scroll(self._global_panel)
-            add_scroll(self._heap_panel)
-            add_scroll(self._stack_panel)
-            spl.setSizes([300, 300, 300])
-
-        layout.addWidget(spl)
-        return page
 
     # ── 事件处理 ──────────────────────────────
 
@@ -584,23 +626,7 @@ class MainWindow(QMainWindow):
             self._apply_settings(dlg.get_settings())
 
     def _apply_settings(self, new_settings: AppSettings):
-        seg_changed    = new_settings.seg_mode != self._settings.seg_mode
-        layout_changed = new_settings.layout   != self._settings.layout
         self._settings = new_settings
-
-        if seg_changed:
-            old_widget = self._mem_stack.widget(0)
-            new_page   = self._build_split_page(new_settings.seg_mode)
-            self._mem_stack.insertWidget(0, new_page)
-            self._mem_stack.removeWidget(old_widget)
-            old_widget.deleteLater()
-            # 根据列数重新设置右侧最小宽度
-            min_w = {"simple": 1200, "standard": 900, "detailed": 1800}
-            self._right_widget.setMinimumWidth(min_w.get(new_settings.seg_mode, 900))
-
-        is_unified = new_settings.layout == "unified"
-        self._mem_stack.setCurrentIndex(1 if is_unified else 0)
-
         step = self._interpreter.get_step(self._current_step) if self._current_step >= 0 else None
         self._refresh_memory(step)
 
@@ -654,6 +680,16 @@ class MainWindow(QMainWindow):
         self._show_step(self._current_step)
         self._prev_btn.setEnabled(self._current_step > 0)
 
+    def _sync_auto_button_state(self, checked: bool):
+        if checked:
+            self._auto_btn.setIcon(self._auto_pause_icon)
+            self._auto_btn.setAccessibleName("暂停自动播放")
+            self._auto_btn.setToolTip("暂停自动步进")
+        else:
+            self._auto_btn.setIcon(self._auto_play_icon)
+            self._auto_btn.setAccessibleName("自动播放")
+            self._auto_btn.setToolTip("自动步进播放")
+
     def _toggle_auto(self, checked):
         if checked:
             self._auto_timer.start(self._auto_speed)
@@ -678,6 +714,9 @@ class MainWindow(QMainWindow):
         self._prev_btn.setEnabled(False)
         self._reset_btn.setEnabled(False)
         self._step_label.setText("未运行")
+        self._desc_box.setProperty("danger", False)
+        self._desc_box.style().unpolish(self._desc_box)
+        self._desc_box.style().polish(self._desc_box)
         self._desc_box.setText("点击「运行」开始解析代码")
         self._editor.clear_highlight()
         self._output_box.clear()
@@ -698,29 +737,9 @@ class MainWindow(QMainWindow):
         self._step_label.setText(f"步骤 {index + 1} / {total}")
         self._editor.highlight_line(step.line_index)
 
-        # 崩溃步骤用红色样式，普通步骤恢复默认
-        if step.crash:
-            self._desc_box.setStyleSheet(f"""
-                background: #3A0000;
-                color: #FF9090;
-                border: 1px solid #8B1A1A;
-                border-left: 3px solid #E05555;
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: 12px;
-                min-height: 44px;
-            """)
-        else:
-            self._desc_box.setStyleSheet(f"""
-                background: {COLORS['bg_panel']};
-                color: {COLORS['yellow_bright']};
-                border: 1px solid {COLORS['border']};
-                border-left: 3px solid {COLORS['yellow']};
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: 12px;
-                min-height: 44px;
-            """)
+        self._desc_box.setProperty("danger", bool(step.crash))
+        self._desc_box.style().unpolish(self._desc_box)
+        self._desc_box.style().polish(self._desc_box)
 
         self._desc_box.setText(f"第 {step.line_index + 1} 行 → {step.description}")
         if step.output:
@@ -735,87 +754,131 @@ class MainWindow(QMainWindow):
             dlg = CrashDialog(step.crash, self)
             dlg.exec()
 
-    def _refresh_memory(self, step: ExecutionStep):
-        import re
-        seg          = self._settings.seg_mode
-        highlight    = step.highlight_vars if step else []
-        heap_named   = {v.name: v for v in step.heap.values()} if step else {}
-        stack_frames = step.stack_frames if step else []
-        globals_all  = step.globals if step else {}
-        obj_pads     = step.objects if step else {}
+    def _refresh_memory(self, step: ExecutionStep | None):
+        self._memory_view.set_state(
+            step,
+            self._settings,
+            list(self._interpreter._functions.keys()),
+        )
 
-        if seg == "simple":
-            code_vars = {
-                frame.function_name: Variable(
-                    name=frame.function_name, type="function",
-                    value="...", address=0x00401000 + i * 0x100,
-                    region=MemoryRegion.CODE, size=0
-                )
-                for i, frame in enumerate(stack_frames)
-            }
-            self._code_panel.refresh(code_vars, highlight)
-            self._global_panel.refresh(globals_all, highlight)
-            self._heap_panel.refresh(heap_named, highlight)
-            self._stack_panel.refresh(stack_frames, highlight, obj_pads)
-
-        elif seg == "detailed":
-            funcs = list(self._interpreter._functions.keys())
-            code_vars = {
-                fname: Variable(
-                    name=fname + "()", type="function",
-                    value="compiled", address=0x00401000 + i * 0x100,
-                    region=MemoryRegion.CODE, size=0
-                )
-                for i, fname in enumerate(funcs)
-            }
-            self._code_panel.refresh(code_vars, highlight)
-
-            literal_vars = step.literals if step else {}
-            self._literal_panel.refresh(literal_vars, highlight)
-
-            data_vars = {n: v for n, v in globals_all.items()
-                         if v.region in (MemoryRegion.DATA, MemoryRegion.GLOBAL)
-                         and v.value is not None}
-            bss_vars  = {n: v for n, v in globals_all.items()
-                         if v.region == MemoryRegion.BSS or v.value is None}
-            self._data_panel.refresh(data_vars, highlight)
-            self._bss_panel.refresh(bss_vars, highlight)
-            self._heap_panel.refresh(heap_named, highlight)
-            self._stack_panel.refresh(stack_frames, highlight, obj_pads)
-
-        else:  # standard
-            self._global_panel.refresh(globals_all, highlight)
-            self._heap_panel.refresh(heap_named, highlight)
-            self._stack_panel.refresh(stack_frames, highlight, obj_pads)
-
-        self._unified_panel.refresh(step, highlight, seg)
+    def _on_memory_view_error(self, message: str):
+        self._auto_timer.stop()
+        self._auto_btn.setChecked(False)
+        self._status_bar.showMessage(f"内存可视化错误: {message}")
 
     # ── 示例文件列表 ──────────────────────────
 
+    _SOURCE_SUFFIXES = {".cpp", ".h", ".cxx", ".cc"}
+
+    def _create_example_directory_item(self, label: str, relative_path: str):
+        item = QTreeWidgetItem([label])
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        item.setData(0, Qt.ItemDataRole.UserRole, None)
+        item.setToolTip(0, relative_path)
+        return item
+
+    def _example_display_label(self, path: str) -> str:
+        source_path = os.fspath(path)
+        stem = os.path.splitext(os.path.basename(source_path))[0]
+        title = ""
+        try:
+            with open(source_path, encoding="utf-8") as source:
+                first = source.readline().strip()
+                if first.startswith("//"):
+                    title = first.lstrip("/ ").strip()
+        except OSError:
+            pass
+        if title:
+            if "：" in title:
+                title = title.split("：", 1)[1].strip()
+            elif ":" in title:
+                title = title.split(":", 1)[1].strip()
+        if not title or title == stem:
+            return stem
+        lesson_id = stem.split("_", 1)[0]
+        return f"{lesson_id}  {title}"
+
+    def _create_example_file_item(self, path: str):
+        fpath = os.path.abspath(os.fspath(path))
+        item = QTreeWidgetItem([self._example_display_label(fpath)])
+        item.setData(0, Qt.ItemDataRole.UserRole, fpath)
+        relative = os.path.relpath(fpath, self._examples_dir)
+        item.setToolTip(0, relative)
+        return item
+
+    def _add_recursive_example_directory(self, parent, path: str) -> int:
+        entries = []
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return 0
+        entries.sort(key=lambda entry: (not entry.is_dir(follow_symlinks=False), entry.name.lower(), entry.name))
+        count = 0
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                if os.path.islink(entry.path):
+                    continue
+                directory_count = self._count_supported_sources(entry.path)
+                if not directory_count:
+                    continue
+                child = self._create_example_directory_item(
+                    entry.name, os.path.relpath(entry.path, self._examples_dir)
+                )
+                parent.addChild(child)
+                child.setExpanded(True)
+                count += self._add_recursive_example_directory(child, entry.path)
+            elif entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(tuple(self._SOURCE_SUFFIXES)):
+                parent.addChild(self._create_example_file_item(entry.path))
+                count += 1
+        return count
+
+    def _count_supported_sources(self, path: str) -> int:
+        count = 0
+        try:
+            entries = os.scandir(path)
+        except OSError:
+            return 0
+        with entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    if not os.path.islink(entry.path):
+                        count += self._count_supported_sources(entry.path)
+                elif entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(tuple(self._SOURCE_SUFFIXES)):
+                    count += 1
+        return count
+
     def _load_examples(self):
-        """扫描 examples/ 目录，填充文件列表"""
+        """按课程清单和 LeetCode 磁盘层级填充分组示例树。"""
         self._file_list.clear()
+        self._example_count.setText("0")
         if not os.path.isdir(self._examples_dir):
             return
-        files = sorted(f for f in os.listdir(self._examples_dir) if f.endswith(".cpp"))
-        for fname in files:
-            # 提取注释首行作为标题（// 示例N：...）
-            fpath = os.path.join(self._examples_dir, fname)
-            title = fname
-            try:
-                with open(fpath, encoding="utf-8") as f:
-                    first = f.readline().strip()
-                    if first.startswith("//"):
-                        title = first.lstrip("/ ").strip()
-            except OSError:
-                pass
-            item = QListWidgetItem(title)
-            item.setData(Qt.ItemDataRole.UserRole, fpath)
-            item.setToolTip(fname)
-            self._file_list.addItem(item)
 
-    def _on_example_clicked(self, item: QListWidgetItem):
-        fpath = item.data(Qt.ItemDataRole.UserRole)
+        example_count = 0
+        for directory, label, filenames in EXAMPLE_CURRICULUM:
+            group = self._create_example_directory_item(label, directory)
+            self._file_list.addTopLevelItem(group)
+            for filename in filenames:
+                fpath = os.path.join(self._examples_dir, directory, filename)
+                if not os.path.isfile(fpath):
+                    continue
+                group.addChild(self._create_example_file_item(fpath))
+                example_count += 1
+            group.setExpanded(True)
+
+        leetcode_root = os.path.join(self._examples_dir, "leetcode")
+        if os.path.isdir(leetcode_root) and not os.path.islink(leetcode_root):
+            leetcode_count = self._count_supported_sources(leetcode_root)
+            if leetcode_count:
+                leetcode_group = self._create_example_directory_item("LeetCode", "leetcode")
+                self._file_list.addTopLevelItem(leetcode_group)
+                leetcode_group.setExpanded(True)
+                example_count += self._add_recursive_example_directory(leetcode_group, leetcode_root)
+
+        self._example_count.setText(str(example_count))
+
+    def _on_example_clicked(self, item: QTreeWidgetItem, _column: int = 0):
+        fpath = item.data(0, Qt.ItemDataRole.UserRole)
         if not fpath:
             return
         try:

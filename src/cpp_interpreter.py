@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from enum import Enum
 
+from .type_parser import (
+    parse_type as _parse_type,
+    type_size as _template_type_size,
+    is_container_type as _is_container_type,
+)
+from .stl_containers import ContainerVariable, STLMethodHandler
+
 
 # ──────────────────────────────────────────────
 # 数据结构
@@ -226,12 +233,17 @@ class CppInterpreter:
         self._literals: dict = {}   # 源码字符串字面量常量区
         self._freed_addrs: set = set()  # 已 delete 的堆地址（用于检测 double-free）
         self._crashed: bool = False     # 一旦崩溃，停止继续生成步骤
+        # 成员方法分发器（延迟初始化，避免循环引用）
+        self._method_dispatcher = None
 
     def build_steps(self):
         """一次性生成所有执行步骤（教学用途，离线计算）"""
         if self._steps_built:
             return
         self._steps_built = True
+        # 延迟导入避免循环依赖
+        from .method_dispatch import MethodDispatcher
+        self._method_dispatcher = MethodDispatcher(self)
         # 先执行全局语句（全局变量初始化），再显式调用 main
         self._execute_lines(self.source_lines, scope="global")
         if "main" in self._functions:
@@ -282,7 +294,7 @@ class CppInterpreter:
 
             # ── 普通函数定义
             m = re.match(
-                r'^\s*(\w[\w\s\*]*?)\s+(\w+)\s*\(([^)]*)\)\s*\{?\s*$',
+                r'^\s*((?:\w[\w\s]*?)(?:\s*<[^>]*>)?(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*\{?\s*$',
                 lines[i]
             )
             if m:
@@ -358,6 +370,36 @@ class CppInterpreter:
                 i = j
                 continue
 
+            # 成员方法：ret_type method_name(params) { ... }
+            m_method = re.match(
+                r'^\s*((?:\w[\w\s]*?)(?:\s*<[^>]*>)?(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*\{?\s*$',
+                s
+            )
+            if m_method:
+                mret  = m_method.group(1).strip()
+                mname = m_method.group(2).strip()
+                # 排除构造/析构函数（已在上面处理）、关键字
+                if mname not in (class_name, f"~{class_name}") \
+                        and mret not in ("if", "while", "for", "else"):
+                    # 收集方法体
+                    depth = 0
+                    method_lines = []
+                    j = i
+                    while j < len(body_lines):
+                        depth += body_lines[j].count("{") - body_lines[j].count("}")
+                        method_lines.append(body_lines[j])
+                        j += 1
+                        if depth == 0 and len(method_lines) > 1:
+                            break
+                    info["methods"][mname] = {
+                        "ret_type":   mret,
+                        "params_str": m_method.group(3).strip(),
+                        "lines":      method_lines,
+                        "body_start": file_offset + i,
+                    }
+                    i = j
+                    continue
+
             # 成员变量声明（非函数）：type name;
             m_member = re.match(
                 r'^(?:int|float|double|char|bool|long|short)\s+(\w+)\s*;', s
@@ -423,6 +465,17 @@ class CppInterpreter:
                 return
         if name in self._globals:
             self._globals[name].value = value
+
+    def _lookup_var_by_address(self, address: int) -> Optional[Variable]:
+        """按模拟地址查找当前仍存活的栈或全局变量。"""
+        for frame in reversed(self._call_stack):
+            for var in frame.variables.values():
+                if var.address == address:
+                    return var
+        for var in self._globals.values():
+            if var.address == address:
+                return var
+        return None
 
     def _execute_lines(self, lines: list[str], scope: str = "global",
                        line_offset: int = 0, local_frame: StackFrame = None):
@@ -499,14 +552,14 @@ class CppInterpreter:
                 i += 1
                 continue
 
-            # ── 对象声明：ClassName obj(args);
+            # ── 对象声明：ClassName obj(args);  或  ClassName obj;
             m_obj = re.match(
-                r'^(\w+)\s+(\w+)\s*\(([^)]*)\)\s*;?$', stripped
+                r'^(\w+)\s+(\w+)\s*(?:\(([^)]*)\))?\s*;?$', stripped
             )
             if m_obj:
                 cls_name  = m_obj.group(1)
                 obj_name  = m_obj.group(2)
-                args_str  = m_obj.group(3).strip()
+                args_str  = (m_obj.group(3) or "").strip()
                 if cls_name in self._classes:
                     self._instantiate_object(cls_name, obj_name, args_str, real_line)
                     i += 1
@@ -581,7 +634,41 @@ class CppInterpreter:
                     region = MemoryRegion.STACK
                     store = self._current_frame().variables
 
-                init_val = self._eval_expr(init_str_raw) if init_str_raw else None
+                # auto 类型：求值后存为普通变量
+                if ctype == "auto":
+                    init_val = self._eval_expr(init_str_raw, real_line) if init_str_raw else None
+                    # 使用 "auto" 作为类型名，size 固定 8（保守）
+                    addr_auto = self._allocator.alloc_stack(8)
+                    region_auto = MemoryRegion.STACK
+                    if scope == "global" or not self._call_stack:
+                        addr_auto = self._allocator.alloc_global(8)
+                        region_auto = MemoryRegion.DATA if init_str_raw else MemoryRegion.BSS
+                        store = self._globals
+                    else:
+                        store = self._current_frame().variables
+                    var = self._make_var(name, "auto", init_val,
+                                        addr_auto, region_auto, 8)
+                    store[name] = var
+                    self._snapshot(real_line,
+                                   f"auto {name} = {init_val}",
+                                   highlight_vars=[name])
+                    i += 1
+                    continue
+
+                # STL 容器类型：创建 ContainerVariable
+                if _is_container_type(ctype):
+                    var = self._make_container_var(name, ctype, addr, region)
+                    # 处理花括号初始化：vector<int> v = {1,2,3}
+                    if init_str_raw:
+                        self._init_container_from_str(var, init_str_raw.strip())
+                    store[name] = var
+                    desc = (f"声明 {ctype} {name}  "
+                            f"[地址: {hex(addr)}, 大小: {var.size}B]")
+                    self._snapshot(real_line, desc, highlight_vars=[name])
+                    i += 1
+                    continue
+
+                init_val = self._eval_expr(init_str_raw, real_line) if init_str_raw else None
                 var = self._make_var(name, ctype, init_val,
                                      addr, region, size,
                                      is_pointer=is_pointer_type(ctype))
@@ -592,6 +679,38 @@ class CppInterpreter:
                 self._snapshot(real_line, desc, highlight_vars=[name])
                 i += 1
                 continue
+
+            # ── 容器下标赋值：varname[key] = value
+            m_subscript_assign = re.match(r'^(\w+)\[(.+)\]\s*=\s*(.+?)\s*;?$', stripped)
+            if m_subscript_assign:
+                cname = m_subscript_assign.group(1)
+                key_str = m_subscript_assign.group(2).strip()
+                val_str = m_subscript_assign.group(3).strip()
+                cvar = self._lookup_var(cname)
+                if isinstance(cvar, ContainerVariable) and self._method_dispatcher:
+                    key = self._eval_expr(key_str)
+                    val = self._eval_expr(val_str)
+                    from .stl_containers import STLMethodHandler
+                    stl = STLMethodHandler(self)
+                    # 更新容器字典值
+                    if cvar.container_kind == "unordered_map":
+                        d = cvar.value if cvar.value is not None else {}
+                        d[key] = val
+                        cvar.value = d
+                        self._snapshot(real_line,
+                                       f"{cname}[{key}] = {val}  →  size={len(d)}",
+                                       highlight_vars=[cname])
+                    elif cvar.container_kind == "vector":
+                        data = cvar.value or []
+                        if 0 <= int(key) < len(data):
+                            data[int(key)] = val
+                            cvar.value = data
+                            stl._sync_vector_heap(cvar)
+                            self._snapshot(real_line,
+                                           f"{cname}[{key}] = {val}",
+                                           highlight_vars=[cname])
+                    i += 1
+                    continue
 
             # ── 赋值语句（含复合赋值）
             assign = self._try_parse_assignment(stripped)
@@ -807,11 +926,16 @@ class CppInterpreter:
 
                     # ── 正常解引用写入
                     rhs = self._eval_expr(rhs_str)
-                    if ptr_val in self._heap:
-                        self._heap[ptr_val].value = rhs
+                    target = self._heap.get(ptr_val)
+                    target_region = "堆"
+                    if target is None:
+                        target = self._lookup_var_by_address(ptr_val)
+                        target_region = "栈" if target and target.region == MemoryRegion.STACK else "全局区"
+                    if target is not None:
+                        target.value = rhs
                         self._snapshot(real_line,
-                                       f"*{ptr_name} = {rhs}  (堆@{hex(ptr_val)})",
-                                       highlight_vars=[ptr_name])
+                                       f"*{ptr_name} = {rhs}  ({target_region}@{hex(ptr_val)})",
+                                       highlight_vars=[ptr_name, target.name])
                 i += 1
                 continue
 
@@ -868,6 +992,19 @@ class CppInterpreter:
                     self._execute_lines(block_lines, scope, line_offset + i + 1, local_frame)
                     iteration += 1
                 i = after
+                continue
+
+            # ── 成员方法调用语句：obj.method(args);
+            m_method_stmt = re.match(r'^(\w+)\.(\w+)\s*\(([^)]*)\)\s*;?$', stripped)
+            if m_method_stmt:
+                if self._method_dispatcher:
+                    self._method_dispatcher.dispatch(
+                        m_method_stmt.group(1),
+                        m_method_stmt.group(2),
+                        m_method_stmt.group(3).strip(),
+                        real_line
+                    )
+                i += 1
                 continue
 
             # ── 函数调用语句（非赋值）
@@ -952,8 +1089,8 @@ class CppInterpreter:
 
     # ── 表达式求值 ────────────────────────────
 
-    def _eval_expr(self, expr: str) -> Any:
-        """求值简单表达式，替换变量后用 eval"""
+    def _eval_expr(self, expr: str, call_line: Optional[int] = None) -> Any:
+        """求值简单表达式，替换变量后用 eval。"""
         if expr is None or expr.strip() == "":
             return None
         expr = expr.strip().rstrip(";")
@@ -964,12 +1101,16 @@ class CppInterpreter:
             v = self._lookup_var(m_addr.group(1))
             return v.address if v else 0
 
-        # 解引用赋值右值：*varname → 返回指针指向的值（只用于 *p 读取）
+        # 解引用读取：*varname → 返回指针指向的值
         m_deref = re.match(r'^\*(\w+)$', expr)
         if m_deref:
             v = self._lookup_var(m_deref.group(1))
-            if v and v.value in self._heap:
-                return self._heap[v.value].value
+            if v:
+                target = self._heap.get(v.value)
+                if target is None:
+                    target = self._lookup_var_by_address(v.value)
+                if target is not None:
+                    return target.value
             return 0
 
         # 字符串字面量
@@ -987,13 +1128,43 @@ class CppInterpreter:
         if expr == "false": return False
         if expr == "nullptr": return None
 
+        # 成员方法调用：obj.method(args)（赋值右侧求值形式）
+        m_dot_call = re.match(r'^(\w+)\.(\w+)\s*\(([^)]*)\)$', expr)
+        if m_dot_call:
+            if self._method_dispatcher:
+                return self._method_dispatcher.dispatch_eval(
+                    m_dot_call.group(1),
+                    m_dot_call.group(2),
+                    m_dot_call.group(3).strip()
+                )
+
+        # 下标操作符：varname[expr]
+        m_subscript = re.match(r'^(\w+)\[(.+)\]$', expr)
+        if m_subscript:
+            vname = m_subscript.group(1)
+            idx_expr = m_subscript.group(2).strip()
+            idx = self._eval_expr(idx_expr)
+            var = self._lookup_var(vname)
+            if isinstance(var, ContainerVariable) and self._method_dispatcher:
+                return self._method_dispatcher.dispatch_eval(
+                    vname, "operator_bracket", str(idx)
+                )
+            # 普通指针数组下标（原有逻辑）
+            if var and var.is_pointer and var.value in self._heap:
+                hvar = self._heap[var.value]
+                if isinstance(hvar.value, list):
+                    try:
+                        return hvar.value[int(idx)]
+                    except (IndexError, TypeError):
+                        return 0
+
         # 内联函数调用（用于赋值右值，如 multiply(4, 5)）
         m_call = re.match(r'^(\w+)\s*\(([^)]*)\)$', expr)
         if m_call:
             fname = m_call.group(1)
             args_str = m_call.group(2).strip()
             if fname in self._functions:
-                return self._eval_function_call(fname, args_str)
+                return self._eval_function_call(fname, args_str, call_line)
 
         # 替换变量为其当前值（含 obj.member 形式）
         def replace_var(m):
@@ -1007,25 +1178,50 @@ class CppInterpreter:
         # 先替换 obj.member → 值
         def replace_dot(m):
             obj_n, mem_n = m.group(1), m.group(2)
+            # 检查是否是 ContainerVariable 的属性访问（不是方法调用）
+            var = self._lookup_var(obj_n)
+            if isinstance(var, ContainerVariable):
+                # 支持 .size / .empty 等无括号属性（不常见，防御性处理）
+                return m.group(0)   # 留给后续 eval 处理
             obj_info = self._objects.get(obj_n, {})
             mems = obj_info.get("members", {})
             if mem_n in mems and mems[mem_n].value is not None:
                 return str(mems[mem_n].value)
             return m.group(0)
 
+        # 先替换表达式中内嵌的 obj.method() 调用（如 it != hashtable.end()）
+        def replace_method_call(m):
+            obj_n  = m.group(1)
+            meth_n = m.group(2)
+            args_s = m.group(3).strip()
+            if self._method_dispatcher:
+                val = self._method_dispatcher.dispatch_eval(obj_n, meth_n, args_s)
+                if val is None:
+                    return "None"
+                return str(val)
+            return m.group(0)
+
+        expr = re.sub(r'\b(\w+)\.(\w+)\s*\(([^)]*)\)', replace_method_call, expr)
+
         subst = re.sub(r'\b(\w+)\.(\w+)\b', replace_dot, expr)
         subst = re.sub(r'\b[a-zA-Z_]\w*\b', replace_var, subst)
 
-        # 替换 C++ 逻辑运算符
-        subst = subst.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+        # 替换 C++ 逻辑运算符（!= 必须先保护，防止 ! 被替换破坏 !=）
+        subst = subst.replace("!=", "___NEQ___")
+        subst = subst.replace("&&", " and ").replace("||", " or ")
+        # 单独的 ! 替换为 not（仅在非 = 之前的情况）
+        subst = re.sub(r'!(?!=)', " not ", subst)
+        subst = subst.replace("___NEQ___", "!=")
 
         try:
-            result = eval(subst, {"__builtins__": {}})
+            result = eval(subst, {"__builtins__": {}, "None": None, "True": True, "False": False})
             return result
-        except Exception:
+        except Exception as e:
+            print(f"[EVAL ERROR] expr={expr!r}  subst={subst!r}  {type(e).__name__}: {e}")
             return 0
 
-    def _eval_function_call(self, fname: str, args_str: str) -> Any:
+    def _eval_function_call(self, fname: str, args_str: str,
+                            call_line: Optional[int] = None) -> Any:
         """
         求值一个函数调用，记录步骤，返回返回值。
         用于赋值右侧的函数调用（如 int r = add(x, y)）。
@@ -1034,19 +1230,21 @@ class CppInterpreter:
         if not finfo:
             return 0
 
-        frame = StackFrame(fname)
+        # 实参必须在调用者作用域中完成求值，再压入被调用者栈帧。
+        arg_strs = [a.strip() for a in args_str.split(",") if a.strip()]
+        arg_vals = [self._eval_expr(arg, call_line) for arg in arg_strs]
+        snapshot_line = call_line if call_line is not None else finfo["body_start"]
+        frame = StackFrame(fname, return_line=snapshot_line)
         self._call_stack.append(frame)
 
         # 绑定参数
         param_decls = [p.strip() for p in finfo["params_str"].split(",") if p.strip()]
-        arg_strs = [a.strip() for a in args_str.split(",") if a.strip()]
         highlight = []
-        for pdecl, aval_str in zip(param_decls, arg_strs):
+        for pdecl, pval in zip(param_decls, arg_vals):
             parts = pdecl.split()
             if len(parts) >= 2:
                 ptype = " ".join(parts[:-1])
                 pname = parts[-1].lstrip("*&")
-                pval  = self._eval_expr(aval_str)
                 addr  = self._allocator.alloc_stack(get_type_size(ptype))
                 frame.variables[pname] = self._make_var(
                     pname, ptype, pval, addr, MemoryRegion.STACK,
@@ -1054,41 +1252,60 @@ class CppInterpreter:
                 )
                 highlight.append(pname)
 
-        # 找出函数体对应的原始行号
-        body_start_line = finfo["body_start"]
-        self._snapshot(body_start_line,
+        self._snapshot(snapshot_line,
                        f"调用 {fname}({args_str})，创建栈帧，绑定参数",
                        highlight_vars=highlight)
 
-        # 执行函数体，用一个临时变量收集 return 值
-        return_val = self._execute_function_body(finfo, body_start_line)
+        return_val = self._execute_function_body(finfo)
 
-        if self._call_stack and self._call_stack[-1].function_name == fname:
-            for obj_name in reversed(self._call_stack[-1].objects):
-                self._destroy_object(obj_name, body_start_line)
+        if self._call_stack and self._call_stack[-1] is frame:
+            for obj_name in reversed(frame.objects):
+                self._destroy_object(obj_name, snapshot_line)
             self._call_stack.pop()
-        self._snapshot(body_start_line, f"{fname}() 执行完毕，栈帧弹出，返回值={return_val}")
+        self._snapshot(snapshot_line,
+                       f"{fname}() 执行完毕，栈帧弹出，返回值={return_val}")
         return return_val
 
-    def _execute_function_body(self, finfo: dict, line_offset: int) -> Any:
-        """执行函数体并返回 return 语句的值"""
+    def _execute_function_body(self, finfo: dict, line_offset: int = None) -> Any:
+        """执行需要返回值的函数体，并返回 return 语句的值。"""
         lines = finfo["lines"][1:]  # 跳过函数定义行
-        return_val = 0
+        returned, return_val = self._execute_function_block(
+            lines, finfo["body_start"] + 1
+        )
+        return return_val if returned else 0
+
+    def _execute_function_block(self, lines: list[str], line_offset: int) -> tuple[bool, Any]:
+        """执行函数内的代码块，并把 return 状态传播到整个当前函数。"""
         i = 0
         while i < len(lines):
-            raw = lines[i]
-            stripped = raw.strip()
-            real_line = finfo["body_start"] + 1 + i
+            stripped = lines[i].strip()
+            real_line = line_offset + i
 
             if not stripped or stripped.startswith("//") or stripped in ("{", "}"):
                 i += 1
                 continue
 
+            m_if = re.match(r'^if\s*\((.+)\)\s*\{?\s*$', stripped)
+            if m_if:
+                cond_str = m_if.group(1).strip()
+                cond_val = bool(self._eval_expr(cond_str, real_line))
+                self._snapshot(real_line,
+                               f"if ({cond_str})  →  条件为 {'真' if cond_val else '假'}")
+                block_lines, after = self._collect_block(lines, i)
+                if cond_val:
+                    returned, return_val = self._execute_function_block(
+                        block_lines, real_line + 1
+                    )
+                    if returned:
+                        return True, return_val
+                i = after
+                continue
+
             if stripped.startswith("return"):
                 val_str = re.sub(r'^return\s*', '', stripped).rstrip(";").strip()
-                return_val = self._eval_expr(val_str) if val_str else 0
+                return_val = self._eval_expr(val_str, real_line) if val_str else 0
                 self._snapshot(real_line, f"return {val_str}  →  值={return_val}")
-                break
+                return True, return_val
 
             if "cout" in stripped:
                 output = self._parse_cout(stripped)
@@ -1101,8 +1318,8 @@ class CppInterpreter:
             if decl:
                 ctype, name, init_str_raw = decl
                 size = get_type_size(ctype)
+                init_val = self._eval_expr(init_str_raw, real_line) if init_str_raw else None
                 addr = self._allocator.alloc_stack(size)
-                init_val = self._eval_expr(init_str_raw) if init_str_raw else None
                 var = self._make_var(name, ctype, init_val,
                                      addr, MemoryRegion.STACK, size)
                 if self._call_stack:
@@ -1117,7 +1334,7 @@ class CppInterpreter:
             assign = self._try_parse_assignment(stripped)
             if assign:
                 name, op, rhs_str = assign
-                rhs = self._eval_expr(rhs_str)
+                rhs = self._eval_expr(rhs_str, real_line)
                 var = self._lookup_var(name)
                 if var:
                     old = var.value
@@ -1134,7 +1351,6 @@ class CppInterpreter:
                 i += 1
                 continue
 
-            # ++/--
             if re.match(r'^\w+\s*(\+\+|--)\s*;', stripped):
                 m = re.match(r'^(\w+)\s*(\+\+|--)', stripped)
                 if m:
@@ -1150,7 +1366,7 @@ class CppInterpreter:
                 continue
 
             i += 1
-        return return_val
+        return False, 0
 
     # ── 对象实例化与销毁 ──────────────────────────
 
@@ -1353,7 +1569,8 @@ class CppInterpreter:
         subst = subst.replace("&&", " and ").replace("||", " or ")
         try:
             return eval(subst, {"__builtins__": {}})
-        except Exception:
+        except Exception as e:
+            print(f"[EVAL_OBJ ERROR] expr={expr!r}  subst={subst!r}  {type(e).__name__}: {e}")
             return 0
 
     def _parse_cout_with_obj(self, line: str, obj_name: str) -> str:
@@ -1406,6 +1623,23 @@ class CppInterpreter:
             name  = m.group(2).strip()
             init_raw = m.group(3)  # 原始字符串，不求值
             return ctype, name, init_raw
+
+        # 新增：模板容器类型 vector<T>, unordered_map<K,V>, unordered_set<T>, string
+        # 也处理 auto 关键字（简化处理，不做类型推断）
+        m2 = re.match(
+            r'^((?:vector|unordered_map|unordered_set)\s*<[^>]+>|string)\s+(\w+)'
+            r'(?:\s*=\s*(.+))?$',
+            line
+        )
+        if m2:
+            return m2.group(1).strip(), m2.group(2).strip(), m2.group(3)
+
+        # auto 声明：auto it = xxx; — 忽略类型推断，直接求值
+        m_auto = re.match(r'^auto\s+(\w+)\s*=\s*(.+)$', line)
+        if m_auto:
+            # 使用 "auto" 作为占位类型名
+            return "auto", m_auto.group(1).strip(), m_auto.group(2).strip()
+
         return None
 
     def _try_parse_assignment(self, line: str):
@@ -1457,3 +1691,150 @@ class CppInterpreter:
                 if val is not None:
                     result += str(val)
         return result
+
+    # ── STL 容器工厂方法 ──────────────────────
+
+    def _make_container_var(self, name: str, type_str: str,
+                            addr: int, region) -> ContainerVariable:
+        """根据类型字符串创建 ContainerVariable，初始化默认 Python 容器值。"""
+        parsed = _parse_type(type_str)
+        size   = _template_type_size(parsed)
+        stride = size
+
+        kind       = parsed.base
+        elem_t     = parsed.params[0].raw if parsed.params else ""
+        mapped_t   = parsed.params[1].raw if len(parsed.params) > 1 else ""
+
+        default_value: Any
+        if kind == "vector":
+            default_value = []
+        elif kind == "unordered_map":
+            default_value = {}
+        elif kind == "string":
+            default_value = ""
+        elif kind == "unordered_set":
+            default_value = set()
+        else:
+            default_value = None
+
+        return ContainerVariable(
+            name=name,
+            type=type_str,
+            value=default_value,
+            address=addr,
+            region=region,
+            size=size,
+            stride=stride,
+            container_kind=kind,
+            elem_type=elem_t,
+            mapped_type=mapped_t,
+        )
+
+    def _init_container_from_str(self, var: ContainerVariable, init_str: str):
+        """
+        从初始化字符串填充容器值。
+        支持花括号列表：{1, 2, 3}
+        """
+        s = init_str.strip()
+        if not s:
+            return
+        if s.startswith("{") and s.endswith("}"):
+            s = s[1:-1].strip()
+        if not s:
+            return
+
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        if var.container_kind == "vector":
+            var.value = [self._eval_expr(p) for p in parts]
+            stl = STLMethodHandler(self)
+            stl._sync_vector_heap(var)
+        elif var.container_kind == "unordered_set":
+            var.value = set(self._eval_expr(p) for p in parts)
+
+    # ── 用户自定义类方法执行 ─────────────────
+
+    def _run_user_method(self, obj_name: str, cls_name: str,
+                         method_name: str, minfo: dict,
+                         args_str: str, line_index: int) -> None:
+        """执行用户自定义类的成员方法（语句形式）。"""
+        frame = StackFrame(f"{cls_name}::{method_name}")
+        self._call_stack.append(frame)
+
+        param_decls = [p.strip() for p in minfo["params_str"].split(",") if p.strip()]
+        arg_vals    = [a.strip() for a in args_str.split(",") if a.strip()]
+        highlight   = []
+        for pdecl, aval_str in zip(param_decls, arg_vals):
+            parts = pdecl.split()
+            if len(parts) >= 2:
+                ptype = " ".join(parts[:-1])
+                pname = parts[-1].lstrip("*&")
+                # 检查实参是否是 ContainerVariable（引用传参，保留类型信息）
+                src_var = self._lookup_var(aval_str.strip())
+                if isinstance(src_var, ContainerVariable):
+                    import copy
+                    alias = copy.copy(src_var)
+                    alias.name = pname
+                    frame.variables[pname] = alias
+                    highlight.append(pname)
+                    continue
+                pval  = self._eval_expr(aval_str)
+                addr  = self._allocator.alloc_stack(get_type_size(ptype))
+                frame.variables[pname] = self._make_var(
+                    pname, ptype, pval, addr, MemoryRegion.STACK,
+                    get_type_size(ptype)
+                )
+                highlight.append(pname)
+
+        # 将 this 对象的成员变量暴露到帧中（隐式 this）
+        obj_info = self._objects.get(obj_name, {})
+        for mname_m, mvar in obj_info.get("members", {}).items():
+            frame.variables[mname_m] = mvar
+
+        self._snapshot(line_index,
+                       f"调用 {obj_name}.{method_name}({args_str})，进入方法体",
+                       highlight_vars=highlight)
+
+        body_lines = minfo["lines"][1:]
+        self._execute_lines(body_lines, "function", minfo["body_start"] + 1, frame)
+
+        if (self._call_stack
+                and self._call_stack[-1].function_name == f"{cls_name}::{method_name}"):
+            self._call_stack.pop()
+        self._snapshot(line_index, f"{obj_name}.{method_name}() 执行完毕，栈帧弹出")
+
+    def _run_user_method_eval(self, obj_name: str, cls_name: str,
+                              method_name: str, minfo: dict,
+                              args_str: str) -> Any:
+        """执行用户自定义类的成员方法并返回值（求值形式）。"""
+        frame = StackFrame(f"{cls_name}::{method_name}")
+        self._call_stack.append(frame)
+
+        param_decls = [p.strip() for p in minfo["params_str"].split(",") if p.strip()]
+        arg_vals    = [a.strip() for a in args_str.split(",") if a.strip()]
+        for pdecl, aval_str in zip(param_decls, arg_vals):
+            parts = pdecl.split()
+            if len(parts) >= 2:
+                ptype = " ".join(parts[:-1])
+                pname = parts[-1].lstrip("*&")
+                pval  = self._eval_expr(aval_str)
+                addr  = self._allocator.alloc_stack(get_type_size(ptype))
+                frame.variables[pname] = self._make_var(
+                    pname, ptype, pval, addr, MemoryRegion.STACK,
+                    get_type_size(ptype)
+                )
+
+        obj_info = self._objects.get(obj_name, {})
+        for mname_m, mvar in obj_info.get("members", {}).items():
+            frame.variables[mname_m] = mvar
+
+        self._snapshot(minfo["body_start"],
+                       f"调用 {obj_name}.{method_name}({args_str})")
+
+        return_val = self._execute_function_body(minfo, minfo["body_start"])
+
+        if (self._call_stack
+                and self._call_stack[-1].function_name == f"{cls_name}::{method_name}"):
+            self._call_stack.pop()
+        self._snapshot(minfo["body_start"],
+                       f"{obj_name}.{method_name}() 返回 {return_val}")
+        return return_val

@@ -11,7 +11,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from .config import COLORS
-from .widgets import VarCard, ObjectCard
+from .widgets import VarCard, ObjectCard, ContainerCard
+from .stl_containers import ContainerVariable
 
 
 # ──────────────────────────────────────────────
@@ -106,7 +107,10 @@ def _build_frame_widgets(frame, highlight_names: list, obj_paddings: dict) -> li
                                       base_addr, total_size, highlight_names))
         else:
             vname, var = payload
-            widgets.append(VarCard(var, highlight=(vname in highlight_names)))
+            if isinstance(var, ContainerVariable):
+                widgets.append(ContainerCard(var, highlight=(vname in highlight_names)))
+            else:
+                widgets.append(VarCard(var, highlight=(vname in highlight_names)))
     return widgets
 
 
@@ -148,7 +152,7 @@ class MemoryPanel(QWidget):
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
         self._cards_layout.setSpacing(3)
         if grow_up:
-            # 堆：新分配地址更高，追加到底部，顶部撑开 → 视觉上"向下生长"
+            # 堆整体贴底；高地址块排在上方，低地址首分配块位于最下方。
             self._cards_layout.setAlignment(Qt.AlignmentFlag.AlignBottom)
         else:
             self._cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -170,14 +174,18 @@ class MemoryPanel(QWidget):
             return
 
         if self._grow_up:
-            # 堆：升序（低地址在上，高地址在下），配合 AlignBottom 使新分配追加到底
-            sorted_vars = sorted(variables.items(), key=lambda kv: kv[1].address)
+            # 高地址在上、低地址在下；新分配块向上增长。
+            sorted_vars = sorted(variables.items(), key=lambda kv: kv[1].address,
+                                 reverse=True)
         else:
             # 全局区等：升序，低地址在上
             sorted_vars = sorted(variables.items(), key=lambda kv: kv[1].address)
 
         for name, var in sorted_vars:
-            self._cards_layout.addWidget(VarCard(var, highlight=(name in highlight_names)))
+            if isinstance(var, ContainerVariable):
+                self._cards_layout.addWidget(ContainerCard(var, highlight=(name in highlight_names)))
+            else:
+                self._cards_layout.addWidget(VarCard(var, highlight=(name in highlight_names)))
 
 
 # ──────────────────────────────────────────────
@@ -308,7 +316,8 @@ class UnifiedMemoryPanel(QWidget):
 
         sections = {}   # key -> (inner_widget, inner_layout)
 
-        def add_section(key, title, color, bg, stretch=2):
+        def add_section(key, title, color, bg, stretch=2,
+                        alignment=Qt.AlignmentFlag.AlignTop):
             layout.addWidget(_make_section_header(title, color))
             inner = QWidget()
             inner.setStyleSheet(f"background: {bg};")
@@ -316,7 +325,7 @@ class UnifiedMemoryPanel(QWidget):
             cl = QVBoxLayout(inner)
             cl.setContentsMargins(6, 6, 6, 6)
             cl.setSpacing(4)
-            cl.setAlignment(Qt.AlignmentFlag.AlignTop)
+            cl.setAlignment(alignment)
             sc = QScrollArea()
             sc.setWidget(inner)
             sc.setWidgetResizable(True)
@@ -334,7 +343,8 @@ class UnifiedMemoryPanel(QWidget):
         if seg_mode == "simple":
             add_section("stack",  "栈 (Stack)  ↓ 向低地址增长", COLORS["green_bright"], COLORS["stack_bg"], 3)
             layout.addWidget(_make_separator())
-            add_section("heap",   "堆 (Heap)  ↓ 向高地址增长",  COLORS["red"],          COLORS["heap_bg"],  2)
+            add_section("heap",   "堆 (Heap)  ↑ 向高地址增长",  COLORS["red"],          COLORS["heap_bg"],  2,
+                        Qt.AlignmentFlag.AlignBottom)
             layout.addWidget(_make_separator())
             add_section("global", "全局变量",                    COLORS["accent"],       COLORS["global_bg"], 2)
             layout.addWidget(_make_separator())
@@ -343,7 +353,8 @@ class UnifiedMemoryPanel(QWidget):
         elif seg_mode == "detailed":
             add_section("stack",   "栈 (Stack)  ↓ 向低地址增长",  COLORS["green_bright"], COLORS["stack_bg"],  3)
             layout.addWidget(_make_separator())
-            add_section("heap",    "堆 (Heap)  ↓ 向高地址增长",   COLORS["red"],          COLORS["heap_bg"],   2)
+            add_section("heap",    "堆 (Heap)  ↑ 向高地址增长",   COLORS["red"],          COLORS["heap_bg"],   2,
+                        Qt.AlignmentFlag.AlignBottom)
             layout.addWidget(_make_separator())
             add_section("data",    "数据段 (Data)  已初始化全局",  COLORS["accent"],       COLORS["global_bg"], 2)
             layout.addWidget(_make_separator())
@@ -356,7 +367,8 @@ class UnifiedMemoryPanel(QWidget):
         else:  # standard
             add_section("stack",  "栈 (Stack)  ↓ 向低地址增长", COLORS["green_bright"], COLORS["stack_bg"],  3)
             layout.addWidget(_make_separator())
-            add_section("heap",   "堆 (Heap)  ↓ 向高地址增长",  COLORS["red"],          COLORS["heap_bg"],   2)
+            add_section("heap",   "堆 (Heap)  ↑ 向高地址增长",  COLORS["red"],          COLORS["heap_bg"],   2,
+                        Qt.AlignmentFlag.AlignBottom)
             layout.addWidget(_make_separator())
             add_section("global", "全局区 / 静态区",             COLORS["accent"],       COLORS["global_bg"], 2)
 
@@ -412,7 +424,9 @@ class UnifiedMemoryPanel(QWidget):
         if cl is not None:
             _clear_layout(cl)
             if heap_vars:
-                for name, var in sorted(heap_vars.items(), key=lambda kv: kv[1].address):
+                for name, var in sorted(heap_vars.items(),
+                                        key=lambda kv: kv[1].address,
+                                        reverse=True):
                     cl.addWidget(VarCard(var, highlight=(name in highlight_vars)))
             else:
                 cl.addWidget(_empty_label())

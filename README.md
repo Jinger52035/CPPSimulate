@@ -28,7 +28,7 @@ Each step shows stack frame creation and teardown, heap allocation and deallocat
 | 三种内存分段粒度（简单/标准/详细） | Three segmentation modes (simple/standard/detailed) |
 | 分栏布局 / 统一虚拟地址空间布局 | Split-panel and unified address space layouts |
 | **崩溃模拟**：野指针 / 二次释放 / 空指针解引用 | **Crash simulation**: wild ptr / double free / null deref |
-| 17 个内置教学示例 | 17 built-in teaching examples |
+| 20 个内置源码示例：19 个课程示例 + LeetCode 递归示例 | 20 built-in source examples: 19 curriculum lessons + recursively discovered LeetCode examples |
 | 可加载外部 `.cpp` 文件 | Load external `.cpp` files |
 
 ---
@@ -48,25 +48,21 @@ When the following undefined behaviors are triggered, the tool **halts execution
 
 ## 内置示例 / Built-in Examples
 
-| 编号 | 示例 | Example |
-|------|------|---------|
-| 01 | 基本变量与类型 | Basic variables and types |
-| 02 | for 循环累加求和 | For loop accumulation |
-| 03 | 函数调用与栈帧 | Function calls and stack frames |
-| 04 | 堆内存 new / delete | Heap allocation with new/delete |
-| 05 | 类的实例化与销毁 | Class instantiation and destruction |
-| 06 | 指针与地址 | Pointers and addresses |
-| 07 | 递归与栈帧增长 | Recursion and stack growth |
-| 08 | 作用域与变量遮蔽 | Scope and variable shadowing |
-| 09 | 结构体内存对齐与 padding | Struct memory alignment and padding |
-| 10 | 值传递 vs 指针传递 | Pass by value vs pass by pointer |
-| 11 | 堆上分配数组 | Array allocation on the heap |
-| 12 | 多个对象的构造与析构顺序 | Construction and destruction order |
-| 13 | 堆向高地址增长 | Heap grows toward higher addresses |
-| 14 | 数据段、BSS段与常量区 | Data segment, BSS, and literals |
-| 15 | 野指针崩溃 | Wild pointer crash |
-| 16 | 二次释放崩溃 | Double free crash |
-| 17 | 空指针解引用崩溃 | Null pointer dereference crash |
+示例编号是稳定 ID；界面中的组内顺序按知识依赖组织。Example numbers are stable IDs; lessons are ordered by prerequisites in the UI.
+
+| 学习阶段 / Stage | 推荐顺序 | 内容 / Topics |
+|------------------|----------|---------------|
+| 语言基础 / Language Basics | 01, 02 | 基本变量与类型；for 循环累加 |
+| 函数、作用域与调用栈 / Functions, Scope & Stack | 03, 08, 07 | 函数调用；变量遮蔽；递归栈帧 |
+| 指针与动态内存 / Pointers & Dynamic Memory | 06, 10, 04, 11, 13 | 地址与解引用；参数传递；new/delete；堆数组与增长方向 |
+| 对象、生命周期与布局 / Objects & Layout | 05, 12, 09 | 类实例；构造析构顺序；内存对齐与 padding |
+| 进程内存模型 / Process Memory Model | 14 | Data、BSS 与常量区 |
+| 内存安全错误 / Memory Safety | 15, 16, 17 | 野指针；二次释放；空指针解引用 |
+| STL 与算法 / STL & Algorithms | 18, 19 | vector；unordered_map 与 Two Sum |
+
+LeetCode 是独立的默认顶层分组，不属于第 8 个课程阶段。工具会递归镜像 `examples/leetcode` 的目录层级，并自动计入 `.cpp`、`.h`、`.cxx`、`.cc` 源码文件；不支持的文件和没有源码后代的目录会被忽略。
+
+LeetCode is a separate default top-level group, not an eighth curriculum stage. The tree recursively mirrors `examples/leetcode` and discovers `.cpp`, `.h`, `.cxx`, and `.cc` files automatically; unsupported files and branches without source descendants are omitted.
 
 ---
 
@@ -74,6 +70,7 @@ When the following undefined behaviors are triggered, the tool **halts execution
 
 - Python 3.11+
 - PyQt6 6.11+
+- PyQt6-WebEngine 6.11+
 
 ```bash
 pip install -r requirements.txt
@@ -87,21 +84,43 @@ pip install -r requirements.txt
 python run.py
 ```
 
+### 运行测试 / Run Tests
+
+`tests/` 保存应用的自动化回归测试，不参与桌面程序运行。测试覆盖：
+
+- `test_main_window_web.py`：示例树、工具栏、示例加载和 Web 内存界面联动。
+- `test_memory_serializer.py`：执行快照到 JSON DTO 的结构、地址和序列化稳定性。
+- `test_web_bridge.py`：Python 与嵌入式 HTML 页面之间的 QWebChannel 状态桥接。
+- `test_web_memory_view.py`：内存布局、分段模式、指针高亮、崩溃状态和 CSP 安全约束。
+
+在项目根目录执行：
+
+```bash
+PYTHONPATH="." python -m unittest discover -s tests -p "test_*.py"
+```
+
+Windows PowerShell 可使用：
+
+```powershell
+$env:PYTHONPATH = "."
+python -m unittest discover -s tests -p "test_*.py"
+```
+
 ---
 
 ## 使用方法 / Usage
 
-1. 启动后左侧示例列表中选择一个示例，或点击「打开」加载自己的 `.cpp` 文件  
-   Select an example from the left panel, or click **Open** to load your own `.cpp` file
+1. 在左侧分组示例树中展开学习阶段并选择示例，或在 File 栏点击「打开」加载自己的 `.cpp` 文件  
+   Expand a learning stage in the grouped example tree, or use **Open** in the File bar to load your own `.cpp` file
 
-2. 点击 **▶ 运行** 解析代码  
-   Click **▶ Run** to parse the code
+2. 点击工具栏的运行图标解析代码  
+   Click the Run icon in the toolbar to parse the code
 
-3. 点击 **单步 →** 逐步执行，右侧内存面板实时更新  
-   Click **Step →** to advance one step; the memory panels update in real time
+3. 点击单步图标逐步执行，右侧内存面板实时更新  
+   Click the Step icon to advance; the memory panels update in real time
 
-4. 点击 **▶▶ 自动** 开启自动播放，用速度滑块调节间隔  
-   Click **▶▶ Auto** for auto-play; use the speed slider to adjust interval
+4. 点击自动播放图标开始或暂停，用速度滑块调节间隔  
+   Click the Auto icon to play or pause; use the speed slider to adjust interval
 
 5. 点击 **⚙ 设置** 切换内存分段粒度与布局模式  
    Click **⚙ Settings** to change segmentation granularity and layout mode
@@ -118,19 +137,45 @@ C++/
 ├── run.py                  # 启动入口 / Entry point
 ├── requirements.txt
 ├── README.md
-├── examples/               # 内置 C++ 示例 / Built-in examples
-│   ├── 01_variables.cpp
-│   └── ...
+├── FIXES_2026-07-23.md     # 当日修复记录 / Daily fix notes
+├── tests/                  # 自动化回归测试 / Automated regression tests
+│   ├── test_main_window_web.py
+│   ├── test_memory_serializer.py
+│   ├── test_web_bridge.py
+│   └── test_web_memory_view.py
+├── examples/               # 按知识进程分组的 C++ 示例
+│   ├── 01_language_basics/
+│   ├── 02_functions_scope_stack/
+│   ├── 03_pointers_dynamic_memory/
+│   ├── 04_objects_layout/
+│   ├── 05_memory_model/
+│   ├── 06_memory_safety/
+│   ├── 07_stl_algorithms/
+│   └── leetcode/           # 默认递归分组 / Default recursive group
+│       └── array/
+│           └── 0001.cpp
 └── src/
     ├── main_window.py      # 主窗口 UI / Main window
     ├── cpp_interpreter.py  # 模拟执行引擎 / Execution engine
-    ├── panels.py           # 内存面板组件 / Memory panel widgets
-    ├── widgets.py          # 字节格子等基础组件 / Byte cell widgets
+    ├── memory_serializer.py # 执行快照 JSON DTO / Snapshot serializer
+    ├── web_bridge.py       # QWebChannel 通信桥 / Web channel bridge
+    ├── web_memory_view.py  # 内嵌 WebEngine 容器 / Embedded web host
+    ├── web/                # HTML/CSS/JS 内存界面 / Web memory UI
+    ├── panels.py           # 旧版 Qt 内存面板（迁移对照）/ Legacy panels
+    ├── widgets.py          # 旧版 Qt 内存组件（迁移对照）/ Legacy widgets
     ├── dialogs.py          # 设置弹框 / 崩溃弹框 / Dialogs
     ├── editor.py           # 代码编辑器 / Code editor
     ├── highlighter.py      # C++ 语法高亮 / Syntax highlighter
     └── config.py           # 颜色主题 / 设置 / Theme and settings
 ```
+
+---
+
+## 界面架构 / UI Architecture
+
+核心内存可视化使用本地 HTML/CSS/JavaScript 重写，并通过 `QWebEngineView` 嵌入 PyQt6 桌面窗口。Python 解释器仍是唯一执行状态来源，`QWebChannel` 只向页面发送当前步骤的版本化 JSON 快照；编辑器、工具栏、自动播放、文件对话框、设置和崩溃教学弹框继续由原生 Qt 控制。页面不依赖网络、CDN 或 Node.js 构建工具。
+
+The core memory visualization is implemented with local HTML/CSS/JavaScript embedded in the PyQt6 window through `QWebEngineView`. Python remains the sole execution-state authority, while `QWebChannel` sends a versioned JSON snapshot of the current step. The editor, desktop controls, playback, file dialogs, settings, and crash dialogs remain native Qt components.
 
 ---
 
@@ -145,6 +190,18 @@ C++/
 详细模式采用 **2 行 × 3 列** 布局，上行为只读区（代码/常量/数据段），下行为运行时区（BSS/堆/栈）。
 
 In detailed mode, the layout is **2 rows × 3 columns**: the top row shows read-only regions (Code / Literals / Data), and the bottom row shows runtime regions (BSS / Heap / Stack).
+
+---
+
+## 修复记录 / Fix Notes
+
+2026-07-23 的详细修复记录已单独整理到 [`FIXES_2026-07-23.md`](FIXES_2026-07-23.md)，包括：
+
+- 指针解引用修改栈变量。
+- 示例 07 递归执行与多层栈帧展示。
+- 小屏幕下 split 多栏整体横向滚动适配。
+- unified 与 split 堆内存向高地址增长的展示方向。
+- 修复原因、代码范围和验证结果。
 
 ---
 
@@ -181,9 +238,3 @@ Simulates x86-64 little-endian; addresses are illustrative, not real:
 | 全局/数据段 | `0x00400000` ↑ | Global / Data | `0x00400000` ↑ |
 | 堆 | `0x01000000` ↑ | Heap | `0x01000000` ↑ |
 | 栈 | `0x7FFF0000` ↓ | Stack | `0x7FFF0000` ↓ |
-
----
-
-## 图片展示 / Screenshots
-
-![界面截图](imgs/img1.png)

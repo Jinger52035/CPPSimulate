@@ -126,17 +126,21 @@ class SettingsDialog(QDialog):
                 if rb.isChecked():
                     card.setStyleSheet(f"""
                         QWidget#radio_card {{
-                            background: {COLORS['dlg_checked']};
-                            border: 2px solid {COLORS['dlg_accent']};
+                            background: {COLORS['accent_muted']};
+                            border: 1px solid {COLORS['accent']};
                             border-radius: 5px;
                         }}
                     """)
                 else:
                     card.setStyleSheet(f"""
                         QWidget#radio_card {{
-                            background: {COLORS['bg_panel']};
-                            border: 1px solid {COLORS['dlg_border']};
+                            background: {COLORS['surface']};
+                            border: 1px solid {COLORS['border_muted']};
                             border-radius: 5px;
+                        }}
+                        QWidget#radio_card:hover {{
+                            background: {COLORS['surface_hover']};
+                            border-color: {COLORS['border']};
                         }}
                     """)
 
@@ -161,9 +165,13 @@ class SettingsDialog(QDialog):
         card.setObjectName("radio_card")
         card.setStyleSheet(f"""
             QWidget#radio_card {{
-                background: {COLORS['bg_panel']};
-                border: 1px solid {COLORS['dlg_border']};
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border_muted']};
                 border-radius: 5px;
+            }}
+            QWidget#radio_card:hover {{
+                background: {COLORS['surface_hover']};
+                border-color: {COLORS['border']};
             }}
         """)
         card_layout = QHBoxLayout(card)
@@ -242,28 +250,42 @@ class CrashDialog(QDialog):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 20)
-        root.setSpacing(0)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
 
-        # ── 红色顶部 header bar
+        # ── subtle danger notice
         header = QWidget()
-        header.setStyleSheet("background: #8B1A1A; border: none;")
-        header.setFixedHeight(64)
+        header.setStyleSheet(f"""
+            background: {COLORS['danger_bg']};
+            border: 1px solid {COLORS['danger_border']};
+            border-left: 3px solid {COLORS['danger']};
+            border-radius: 5px;
+        """)
+        header.setFixedHeight(68)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(20, 0, 20, 0)
 
-        icon_lbl = QLabel("💥")
-        icon_lbl.setStyleSheet("font-size: 28px; background: transparent;")
+        icon_lbl = QLabel("!")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setFixedSize(24, 24)
+        icon_lbl.setStyleSheet(f"""
+            color: {COLORS['danger_fg']};
+            background: #4A292B;
+            border: 1px solid {COLORS['danger_border']};
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+        """)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
         t1 = QLabel("程序崩溃 / Segmentation Fault")
         t1.setStyleSheet(
-            "color: #FFD0D0; font-size: 15px; font-weight: bold; background: transparent;"
+            f"color: {COLORS['danger_fg']}; font-size: 15px; font-weight: 600; background: transparent;"
         )
         t2 = QLabel(crash.title)
         t2.setStyleSheet(
-            "color: #FF9090; font-size: 11px; background: transparent;"
+            f"color: {COLORS['fg_muted']}; font-size: 11px; background: transparent;"
         )
         title_col.addWidget(t1)
         title_col.addWidget(t2)
@@ -276,7 +298,7 @@ class CrashDialog(QDialog):
 
         # ── 内容区
         body = QVBoxLayout()
-        body.setContentsMargins(24, 18, 24, 0)
+        body.setContentsMargins(4, 0, 4, 0)
         body.setSpacing(14)
 
         # 崩溃类型 badge
@@ -286,12 +308,13 @@ class CrashDialog(QDialog):
         badge_row = QHBoxLayout()
         badge = QLabel(f"  {badge_label}  ")
         badge.setStyleSheet(f"""
-            background: {badge_color};
-            color: white;
+            background: {COLORS['surface_subtle']};
+            color: {badge_color};
+            border: 1px solid {COLORS['border_muted']};
             font-size: 11px;
-            font-weight: bold;
-            border-radius: 4px;
-            padding: 2px 4px;
+            font-weight: 600;
+            border-radius: 9px;
+            padding: 2px 6px;
         """)
         badge_row.addWidget(badge)
         badge_row.addStretch()
@@ -301,13 +324,14 @@ class CrashDialog(QDialog):
         cause_lbl = QLabel(crash.cause)
         cause_lbl.setWordWrap(True)
         cause_lbl.setStyleSheet(f"""
-            color: {COLORS['yellow_bright']};
+            color: {COLORS['danger_fg']};
             font-size: 13px;
             font-weight: 600;
             padding: 8px 12px;
-            background: {COLORS['bg_panel']};
-            border-left: 3px solid {COLORS['yellow']};
-            border-radius: 4px;
+            background: {COLORS['danger_bg']};
+            border: 1px solid {COLORS['danger_border']};
+            border-left: 3px solid {COLORS['danger']};
+            border-radius: 5px;
         """)
         body.addWidget(cause_lbl)
 
@@ -345,23 +369,25 @@ class CrashDialog(QDialog):
 
         # ── 关闭按钮
         btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(24, 0, 24, 0)
+        btn_row.setContentsMargins(4, 0, 4, 0)
         btn_row.addStretch()
         ok_btn = QPushButton("我知道了")
         ok_btn.setFixedWidth(110)
         ok_btn.setStyleSheet(f"""
             QPushButton {{
-                background: #8B1A1A;
-                color: #FFD0D0;
-                border: 1px solid #C05050;
-                border-radius: 6px;
+                background: {COLORS['surface_raised']};
+                color: {COLORS['fg_default']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 5px;
                 padding: 6px 0;
                 font-size: 13px;
-                font-weight: bold;
+                font-weight: 600;
             }}
             QPushButton:hover {{
-                background: #A02020;
-                color: white;
+                background: {COLORS['surface_hover']};
+            }}
+            QPushButton:focus {{
+                border: 2px solid {COLORS['border_focus']};
             }}
         """)
         ok_btn.clicked.connect(self.accept)

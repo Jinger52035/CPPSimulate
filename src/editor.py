@@ -46,6 +46,20 @@ class CodeEditor(QPlainTextEdit):
         p.setColor(QPalette.ColorRole.Highlight, QColor(COLORS["selection_bg"]))
         p.setColor(QPalette.ColorRole.HighlightedText, QColor(COLORS["text_select"]))
         self.setPalette(p)
+        self.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background: {COLORS['canvas']};
+                color: {COLORS['fg_muted']};
+                border: 1px solid {COLORS['border_muted']};
+                border-radius: 5px;
+                padding: 2px;
+                selection-background-color: {COLORS['accent_muted']};
+                selection-color: {COLORS['text_select']};
+            }}
+            QPlainTextEdit:focus {{
+                border-color: {COLORS['border_focus']};
+            }}
+        """)
 
     def _line_number_width(self):
         digits = len(str(max(1, self.blockCount())))

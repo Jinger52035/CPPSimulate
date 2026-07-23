@@ -171,7 +171,7 @@ class VarCard(QFrame):
 
         type_lbl = QLabel(var.type + ("[]" if is_array else ""))
         type_lbl.setStyleSheet(f"""
-            color: {COLORS['purple']};
+            color: {COLORS['syn_const']};
             background: {COLORS['purple_bg']};
             font-size: 10px;
             font-style: italic;
@@ -256,7 +256,7 @@ class ObjectCard(QFrame):
         title_row.setSpacing(6)
         cls_lbl = QLabel(cls_name)
         cls_lbl.setStyleSheet(f"""
-            color: {COLORS['purple']};
+            color: {COLORS['syn_const']};
             background: {COLORS['purple_bg']};
             font-size: 10px;
             font-style: italic;
@@ -298,7 +298,7 @@ class ObjectCard(QFrame):
             dot.setStyleSheet(f"color: {color}; font-size: 8px; background: transparent;")
             type_lbl = QLabel(var.type)
             type_lbl.setStyleSheet(
-                f"color: {COLORS['purple']}; font-size: 10px; font-style: italic; background: transparent;"
+                f"color: {COLORS['syn_const']}; font-size: 10px; font-style: italic; background: transparent;"
             )
             mname_lbl = QLabel(mname)
             hl = mname in highlight_names or f"{obj_name}.{mname}" in highlight_names
@@ -326,3 +326,179 @@ class ObjectCard(QFrame):
             row.addStretch()
             row.addWidget(addr_lbl)
             root.addLayout(row)
+
+
+# ──────────────────────────────────────────────
+# ContainerCard：STL 容器卡片
+# ──────────────────────────────────────────────
+
+class ContainerCard(QFrame):
+    """
+    STL 容器的可视化卡片。
+    - vector：连续内存格（ByteCells）+ size/capacity 元信息
+    - unordered_map：key-value 对列表
+    - string：字符串内容 + 长度
+    - unordered_set：元素列表
+    """
+
+    def __init__(self, var, highlight: bool = False, parent=None):
+        super().__init__(parent)
+        from .stl_containers import ContainerVariable
+        assert isinstance(var, ContainerVariable)
+
+        is_hl = highlight
+        border_color = COLORS["yellow_bright"] if is_hl else COLORS["border"]
+        self.setFrameShape(QFrame.Shape.Box)
+        self.setStyleSheet(
+            f"ContainerCard {{ "
+            f"border: 1px solid {border_color}; border-radius: 4px; "
+            f"background: {COLORS['bg_card']}; "
+            f"}}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        # ── 标题行 ─────────────────────────────
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+
+        kind_badge = QLabel(var.container_kind)
+        kind_badge.setStyleSheet(
+            f"color: {COLORS['syn_const']}; font-size: 10px; "
+            f"font-style: italic; background: transparent;"
+        )
+        name_lbl = QLabel(var.name)
+        name_lbl.setStyleSheet(
+            f"color: {COLORS['yellow_bright'] if is_hl else COLORS['text_bright']}; "
+            f"font-size: 12px; font-weight: 600; background: transparent;"
+        )
+        addr_lbl = QLabel(hex(var.address))
+        addr_lbl.setStyleSheet(
+            f"color: {COLORS['text_dim']}; font-size: 9px; background: transparent; "
+            f"font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;"
+        )
+
+        title_row.addWidget(kind_badge)
+        title_row.addWidget(name_lbl)
+        title_row.addStretch()
+        title_row.addWidget(addr_lbl)
+        root.addLayout(title_row)
+
+        # ── 容器内容区域 ───────────────────────
+        if var.container_kind == "vector":
+            self._build_vector(root, var)
+        elif var.container_kind == "unordered_map":
+            self._build_map(root, var)
+        elif var.container_kind == "string":
+            self._build_string(root, var)
+        elif var.container_kind == "unordered_set":
+            self._build_set(root, var)
+
+    def _meta_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_dim']}; font-size: 10px; background: transparent;"
+        )
+        return lbl
+
+    def _value_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {COLORS['syn_number']}; font-size: 11px; "
+            f"font-weight: 600; background: transparent;"
+        )
+        return lbl
+
+    def _build_vector(self, root: QVBoxLayout, var):
+        data = var.value or []
+        # 元信息行
+        meta_row = QHBoxLayout()
+        meta_row.addWidget(self._meta_label(f"size={len(data)}"))
+        meta_row.addWidget(self._meta_label(f"cap={var.capacity}"))
+        if var.heap_data_addr:
+            meta_row.addWidget(self._meta_label(f"heap@{hex(var.heap_data_addr)}"))
+        meta_row.addStretch()
+        root.addLayout(meta_row)
+
+        if data:
+            # 连续内存格（每个元素一个色块）
+            cells_row = QHBoxLayout()
+            cells_row.setSpacing(2)
+            cell_color = COLORS.get("heap_color", COLORS.get("red", "#e06c75"))
+            for idx, elem in enumerate(data):
+                cell = QFrame()
+                cell.setFixedSize(36, 22)
+                cell.setStyleSheet(
+                    f"background: {cell_color}; border: 1px solid {COLORS['text_dim']}; "
+                    f"border-radius: 2px;"
+                )
+                cell_layout = QVBoxLayout(cell)
+                cell_layout.setContentsMargins(2, 1, 2, 1)
+                idx_lbl = QLabel(str(idx))
+                idx_lbl.setStyleSheet(
+                    f"color: {COLORS['text_dim']}; font-size: 8px; background: transparent;"
+                )
+                val_lbl = QLabel(str(elem))
+                val_lbl.setStyleSheet(
+                    f"color: {COLORS['text_bright']}; font-size: 10px; "
+                    f"font-weight: 600; background: transparent;"
+                )
+                idx_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                cell_layout.addWidget(idx_lbl)
+                cell_layout.addWidget(val_lbl)
+                cells_row.addWidget(cell)
+            cells_row.addStretch()
+            root.addLayout(cells_row)
+        else:
+            root.addWidget(self._meta_label("(空)"))
+
+    def _build_map(self, root: QVBoxLayout, var):
+        d = var.value or {}
+        root.addWidget(self._meta_label(f"size={len(d)}"))
+        if d:
+            for k, v in list(d.items())[:8]:
+                row = QHBoxLayout()
+                row.setSpacing(4)
+                key_lbl = QLabel(f"[{k}]")
+                key_lbl.setStyleSheet(
+                    f"color: {COLORS['syn_string']}; font-size: 11px; "
+                    f"font-weight: 600; background: transparent;"
+                )
+                arrow = QLabel("→")
+                arrow.setStyleSheet(f"color: {COLORS['text_dim']}; background: transparent;")
+                val_lbl = self._value_label(str(v))
+                row.addWidget(key_lbl)
+                row.addWidget(arrow)
+                row.addWidget(val_lbl)
+                row.addStretch()
+                root.addLayout(row)
+            if len(d) > 8:
+                root.addWidget(self._meta_label(f"… 共 {len(d)} 个键值对"))
+        else:
+            root.addWidget(self._meta_label("(空)"))
+
+    def _build_string(self, root: QVBoxLayout, var):
+        s = var.value or ""
+        root.addWidget(self._meta_label(f"len={len(s)}"))
+        display = f'"{s[:40]}{"…" if len(s) > 40 else ""}"'
+        root.addWidget(self._value_label(display))
+
+    def _build_set(self, root: QVBoxLayout, var):
+        s = var.value or set()
+        root.addWidget(self._meta_label(f"size={len(s)}"))
+        if s:
+            elems = sorted(str(e) for e in list(s)[:12])
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            for elem in elems:
+                lbl = self._value_label(elem)
+                row.addWidget(lbl)
+            row.addStretch()
+            root.addLayout(row)
+            if len(s) > 12:
+                root.addWidget(self._meta_label(f"… 共 {len(s)} 个元素"))
+        else:
+            root.addWidget(self._meta_label("(空)"))

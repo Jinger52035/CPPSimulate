@@ -1,3 +1,8 @@
+# Desktop UI and embedded local HTML memory visualizer
 PyQt6==6.11.0
 PyQt6-Qt6==6.11.0
-PyQt6_sip==13.11.1
+PyQt6-sip==13.11.1
+PyQt6-WebEngine==6.11.0
+PyQt6-WebEngine-Qt6==6.11.0
+
+# Tests use Python's standard-library unittest; no extra test package is required.
